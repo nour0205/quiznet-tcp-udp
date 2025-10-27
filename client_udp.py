@@ -47,12 +47,20 @@ def listen():
             if msg.startswith("question:"):
                 parts = msg.split(":", 2)
                 qid = parts[1]
-                question = parts[2]
+                question_data = parts[2].split("|")
+                question_text = question_data[0]
+                options = question_data[1:]
+                
                 print(f"\n{Colors.BOLD}{Colors.BLUE}{'='*50}")
                 print(f"📝 QUESTION {qid}")
                 print(f"{'='*50}{Colors.ENDC}")
-                print(f"{Colors.CYAN}{question}{Colors.ENDC}")
-                print(f"{Colors.YELLOW}⏱️  You have 10 seconds! Quick!{Colors.ENDC}\n")
+                print(f"{Colors.CYAN}{question_text}{Colors.ENDC}\n")
+                
+                # Display options vertically
+                for option in options:
+                    print(f"  {Colors.YELLOW}{option}{Colors.ENDC}")
+                
+                print(f"\n{Colors.YELLOW}⏱️  You have 10 seconds! Quick!{Colors.ENDC}\n")
             elif msg.startswith("broadcast:"):
                 content = msg.split(':', 1)[1]
                 if "correct" in content.lower() and USERNAME in content:
@@ -70,7 +78,7 @@ def listen():
                     print(f"🏁 {content}")
                     print(f"{'='*50}{Colors.ENDC}\n")
                 elif "time's up" in content.lower():
-                    print(f"{Colors.RED}⏰ {content}{Colors.ENDC}")
+                    print(f"\n{Colors.RED}⏰ {content}{Colors.ENDC}")
                 else:
                     print(f"{Colors.YELLOW}📢 {content}{Colors.ENDC}")
             elif msg.startswith("score:"):
@@ -86,8 +94,17 @@ def listen():
                 ranking = msg.split(':', 1)[1]
                 print(f"\n{Colors.BOLD}{Colors.GREEN}{'='*50}")
                 print(f"🏆 FINAL RANKINGS 🏆")
-                print(f"{'='*50}{Colors.ENDC}")
-                print(f"{Colors.YELLOW}{ranking}{Colors.ENDC}\n")
+                print(f"{'='*50}{Colors.ENDC}\n")
+                
+                # Parse and display rankings vertically
+                entries = ranking.split(" | ")
+                medals = ["🥇", "🥈", "🥉"]
+                for i, entry in enumerate(entries):
+                    medal = medals[i] if i < 3 else "  "
+                    # Extract place number and rest of entry
+                    # Entry format: "1. username (score pts)"
+                    print(f"{medal} {Colors.YELLOW}{entry}{Colors.ENDC}")
+                print()
         except socket.timeout:
             continue
         except Exception as e:

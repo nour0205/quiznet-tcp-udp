@@ -33,8 +33,8 @@ def handle_join(data, addr):
 def ask_questions():
     for qid, (text, correct, options) in enumerate(questions, 1):
         print(f"[QUESTION {qid}] Broadcasting...")
-        opts = " ".join([f"{key}) {val}" for key, val in options.items()])
-        broadcast(f"question:{qid}:{text} [{opts}]")
+        opts = "|".join([f"{key}) {val}" for key, val in options.items()])
+        broadcast(f"question:{qid}:{text}|{opts}")
         start = time.time()
         answered_users = set()  # Track who has answered this question
 
@@ -65,7 +65,7 @@ def ask_questions():
                 continue
 
         # Show correct answer if time's up
-        broadcast(f"broadcast:Time's up! Correct answer was {correct}) {options[correct]}.")
+        broadcast(f"broadcast:\n⏰ Time's up! Correct answer was {correct}) {options[correct]}.")
 
         # Show scores
         score_msg = " ".join([f"{u}:{s}" for u, s in scores.items()])
