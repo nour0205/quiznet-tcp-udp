@@ -34,12 +34,15 @@ ADDR = (SERVER_IP, 8888)
 client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 client_socket.settimeout(0.5)
 
+quiz_started = False  # Track if quiz has started
+
 # Join the game
 client_socket.sendto(f"join:{USERNAME}".encode(), ADDR)
 print(f"{Colors.GREEN}✓ Connected to quiz server!{Colors.ENDC}")
 print(f"{Colors.CYAN}Waiting for quiz to start...{Colors.ENDC}\n")
 
 def listen():
+    global quiz_started
     while True:
         try:
             msg, _ = client_socket.recvfrom(2048)
@@ -63,13 +66,14 @@ def listen():
                 print(f"\n{Colors.YELLOW}⏱️  You have 10 seconds! Quick!{Colors.ENDC}\n")
             elif msg.startswith("broadcast:"):
                 content = msg.split(':', 1)[1]
-                if "correct" in content.lower() and USERNAME in content:
+                if "correctly" in content.lower() and USERNAME in content:
                     print(f"{Colors.GREEN}{Colors.BOLD}✓ {content}{Colors.ENDC}")
-                elif "incorrect" in content.lower() and USERNAME in content:
+                elif "incorrectly" in content.lower() and USERNAME in content:
                     print(f"{Colors.RED}{Colors.BOLD}✗ {content}{Colors.ENDC}")
                 elif "joined" in content.lower():
                     print(f"{Colors.CYAN}👋 {content}{Colors.ENDC}")
                 elif "starting" in content.lower():
+                    quiz_started = True
                     print(f"\n{Colors.BOLD}{Colors.GREEN}{'='*50}")
                     print(f"🚀 {content}")
                     print(f"{'='*50}{Colors.ENDC}\n")
@@ -78,7 +82,18 @@ def listen():
                     print(f"🏁 {content}")
                     print(f"{'='*50}{Colors.ENDC}\n")
                 elif "time's up" in content.lower():
-                    print(f"\n{Colors.RED}⏰ {content}{Colors.ENDC}")
+                    # Parse to make correct answer bold
+                    # Format: "\n⏰ Time's up! Correct answer was X) Answer text."
+                    if "correct answer was" in content.lower():
+                        parts_split = content.split("Correct answer was ")
+                        if len(parts_split) > 1:
+                            before = parts_split[0]
+                            answer_part = parts_split[1]
+                            print(f"\n{Colors.YELLOW}{before}Correct answer was {Colors.BOLD}{answer_part}{Colors.ENDC}")
+                        else:
+                            print(f"\n{Colors.YELLOW}{content}{Colors.ENDC}")
+                    else:
+                        print(f"\n{Colors.YELLOW}{content}{Colors.ENDC}")
                 else:
                     print(f"{Colors.YELLOW}📢 {content}{Colors.ENDC}")
             elif msg.startswith("score:"):
@@ -114,9 +129,26 @@ def listen():
 # Run listener in background
 threading.Thread(target=listen, daemon=True).start()
 
-# Send answers manually
-print(f"{Colors.BOLD}Ready to play! Type your answer (a/b/c) when questions appear.{Colors.ENDC}")
-print(f"{Colors.BOLD}Type 'quit' to exit.{Colors.ENDC}\n")
+# Wait for quiz to start before showing input prompts
+quiz_active = False
+
+def wait_for_quiz_start():
+    global quiz_active
+    while not quiz_active:
+        try:
+            # Just sleep and wait
+            import time
+            time.sleep(0.5)
+        except:
+            break
+
+# Don't show input prompt until quiz starts
+import time as time_module
+while not quiz_started:
+    time_module.sleep(0.1)
+
+# Send answers manually (only shows after quiz starts)
+print(f"{Colors.BOLD}Type your answer (a/b/c) when questions appear, or 'quit' to exit.{Colors.ENDC}\n")
 
 while True:
     try:
