@@ -103,6 +103,13 @@ st.markdown("""
         box-shadow: 0 8px 20px rgba(0,0,0,0.4);
     }
     
+    /* Correct answer highlight */
+    div.stButton > button.correct-answer {
+        background: linear-gradient(135deg, #26890C 0%, #1F6F0A 100%) !important;
+        border: 4px solid #4CAF50 !important;
+        box-shadow: 0 0 20px rgba(76, 175, 80, 0.6) !important;
+    }
+    
     /* Kahoot button colors */
     [data-testid="column"]:nth-of-type(1) button {
         background: linear-gradient(135deg, #E21B3C 0%, #D01257 100%);
@@ -269,20 +276,26 @@ if 'quiz_started' not in st.session_state:
     st.session_state.quiz_started = False
 if 'answer_sent' not in st.session_state:
     st.session_state.answer_sent = False
+if 'correct_answer' not in st.session_state:
+    st.session_state.correct_answer = None
+if 'show_correct' not in st.session_state:
+    st.session_state.show_correct = False
+if 'times_up_message' not in st.session_state:
+    st.session_state.times_up_message = None
 
 # Header
-st.markdown('<div class="quiz-header">🎯 QUIZNET TCP QUIZ 🎯</div>', unsafe_allow_html=True)
+st.markdown('<div class="quiz-header">QUIZNET TCP QUIZ</div>', unsafe_allow_html=True)
 st.markdown('<p class="quiz-subtitle">Real-time Multiplayer Quiz!</p>', unsafe_allow_html=True)
 
 # Connection section
 if not st.session_state.connected:
     st.markdown('<div class="connection-box">', unsafe_allow_html=True)
-    st.markdown("### 📡 Join the Quiz")
+    st.markdown("### Join the Quiz")
     
     server_ip = st.text_input("Server IP", value="127.0.0.1", placeholder="Enter server IP address")
     username = st.text_input("Username", value="", placeholder="Choose your username")
     
-    if st.button("🚀 JOIN GAME", type="primary", use_container_width=True):
+    if st.button("JOIN GAME", type="primary", use_container_width=True):
         if username.strip():
             client = QuizClient(server_ip, username)
             success, msg = client.connect()
@@ -328,10 +341,25 @@ else:
                 }
                 st.session_state.answer_sent = False
                 st.session_state.quiz_started = True
+                st.session_state.show_correct = False
+                st.session_state.correct_answer = None
+                st.session_state.times_up_message = None
                 
             elif msg.startswith("broadcast:"):
                 content = msg.split(':', 1)[1]
                 st.session_state.messages.append(("broadcast", content))
+                
+                # Check for time's up message to extract correct answer
+                if "Time's up!" in content and "Correct answer was" in content:
+                    st.session_state.times_up_message = content
+                    st.session_state.show_correct = True
+                    # Extract the correct answer letter (e.g., "a", "b", "c")
+                    try:
+                        answer_part = content.split("Correct answer was ")[1]
+                        correct_letter = answer_part.split(")")[0].strip()
+                        st.session_state.correct_answer = correct_letter
+                    except:
+                        pass
                 
             elif msg.startswith("score:"):
                 scores = msg.split(':', 1)[1]
@@ -345,9 +373,10 @@ else:
                 ranking = msg.split(':', 1)[1]
                 st.session_state.ranking = ranking
                 st.session_state.current_question = None
+                st.session_state.show_correct = False
     
-    # Show current question
-    if st.session_state.current_question and not st.session_state.answer_sent:
+    # Show current question or results
+    if st.session_state.current_question:
         q = st.session_state.current_question
         
         # Question container
@@ -356,13 +385,18 @@ else:
         st.markdown(f'<div class="question-text">{q["text"]}</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
         
-        # Timer
-        elapsed = time.time() - q['start_time']
-        remaining = max(0, 10 - elapsed)
-        st.markdown('<div class="timer-container">', unsafe_allow_html=True)
-        st.progress(remaining / 10)
-        st.markdown(f'<p style="text-align: center; color: white; font-size: 1em; font-weight: bold; margin-top: 5px;">⏱️ {int(remaining)}s</p>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+        # Show time's up message if available
+        if st.session_state.times_up_message and st.session_state.show_correct:
+            st.markdown('<div class="status-waiting">Time\'s up!</div>', unsafe_allow_html=True)
+        
+        # Timer (only show if not answer sent and not showing correct answer)
+        if not st.session_state.answer_sent and not st.session_state.show_correct:
+            elapsed = time.time() - q['start_time']
+            remaining = max(0, 10 - elapsed)
+            st.markdown('<div class="timer-container">', unsafe_allow_html=True)
+            st.progress(remaining / 10)
+            st.markdown(f'<p style="text-align: center; color: white; font-size: 1em; font-weight: bold; margin-top: 5px;">{int(remaining)}s</p>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
         
         # Answer buttons - 2x2 grid for Kahoot style
         st.markdown("<br>", unsafe_allow_html=True)
@@ -384,24 +418,41 @@ else:
             choice = option.split(')')[0].strip().lower()
             
             with cols[i]:
-                # Add geometric shapes like Kahoot
-                shapes = ["🔺", "💠", "⭕", "🟩"]
-                shape = shapes[i] if i < len(shapes) else ""
-                if st.button(f"{shape}\n\n{option}", key=f"opt_{choice}", use_container_width=True):
-                    st.session_state.client.send_answer(choice)
-                    st.session_state.answer_sent = True
-                    st.rerun()
+                # Check if this is the correct answer
+                is_correct = st.session_state.show_correct and choice == st.session_state.correct_answer
+                
+                # Disable buttons after answer sent or when showing correct answer
+                button_disabled = st.session_state.answer_sent or st.session_state.show_correct
+                
+                if not button_disabled:
+                    # Active button - user can click
+                    if st.button(option, key=f"opt_{choice}", use_container_width=True):
+                        st.session_state.client.send_answer(choice)
+                        st.session_state.answer_sent = True
+                        st.rerun()
+                elif st.session_state.show_correct:
+                    # Show correct answer state - use HTML only to avoid double rendering
+                    if is_correct:
+                        # Highlight correct answer in green
+                        st.markdown(f'<div style="background: linear-gradient(135deg, #26890C 0%, #1F6F0A 100%); color: white; padding: 25px; border-radius: 12px; text-align: center; font-weight: 700; font-size: 1.1em; border: 4px solid #4CAF50; box-shadow: 0 0 20px rgba(76, 175, 80, 0.6);">{option}</div>', unsafe_allow_html=True)
+                    else:
+                        # Show other options in dimmed state
+                        st.markdown(f'<div style="background: rgba(100, 100, 100, 0.3); color: rgba(255,255,255,0.5); padding: 25px; border-radius: 12px; text-align: center; font-weight: 700; font-size: 1.1em;">{option}</div>', unsafe_allow_html=True)
+                else:
+                    # Answer submitted but waiting for results - show disabled buttons
+                    st.button(option, key=f"opt_{choice}_disabled", use_container_width=True, disabled=True)
         
-    elif st.session_state.answer_sent and st.session_state.current_question:
-        st.markdown('<div class="status-waiting">✓ Answer submitted! Waiting for results...</div>', unsafe_allow_html=True)
+        # Show status message only when answer submitted and not showing correct answer yet
+        if st.session_state.answer_sent and not st.session_state.show_correct:
+            st.markdown('<div class="status-waiting">Answer submitted! Waiting for results...</div>', unsafe_allow_html=True)
         
     elif st.session_state.connected and not st.session_state.quiz_started:
-        st.markdown('<div class="status-waiting">⏳ Waiting for quiz to start...<br>The host will begin the game soon!</div>', unsafe_allow_html=True)
+        st.markdown('<div class="status-waiting">Waiting for quiz to start...<br>The host will begin the game soon!</div>', unsafe_allow_html=True)
     
-    # Show scores
-    if st.session_state.scores and not st.session_state.ranking:
+    # Show scores (only if we have scores and not showing correct answer to avoid double render)
+    if st.session_state.scores and not st.session_state.ranking and not st.session_state.show_correct:
         st.markdown('<div class="score-board">', unsafe_allow_html=True)
-        st.markdown('<div class="score-title">📊 Leaderboard</div>', unsafe_allow_html=True)
+        st.markdown('<div class="score-title">Leaderboard</div>', unsafe_allow_html=True)
         
         # Sort scores
         sorted_scores = sorted(st.session_state.scores.items(), key=lambda x: x[1], reverse=True)
@@ -409,37 +460,28 @@ else:
         for rank, (user, score) in enumerate(sorted_scores, 1):
             is_current = user == st.session_state.client.username
             class_name = "score-entry current-user" if is_current else "score-entry"
-            medal = ""
-            if rank == 1:
-                medal = "🥇 "
-            elif rank == 2:
-                medal = "🥈 "
-            elif rank == 3:
-                medal = "🥉 "
             
-            st.markdown(f'<div class="{class_name}">{medal}{rank}. {user} - {score} pts</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="{class_name}">{rank}. {user} - {score} pts</div>', unsafe_allow_html=True)
         
         st.markdown('</div>', unsafe_allow_html=True)
     
     # Show final ranking
     if st.session_state.ranking:
         st.markdown('<div class="ranking-container">', unsafe_allow_html=True)
-        st.markdown('<div class="ranking-title">🏆 FINAL RESULTS 🏆</div>', unsafe_allow_html=True)
+        st.markdown('<div class="ranking-title">FINAL RESULTS</div>', unsafe_allow_html=True)
         
         entries = st.session_state.ranking.split(" | ")
         
         for i, entry in enumerate(entries):
             rank_class = f"rank-{i+1}" if i < 3 else "rank-entry"
-            medals = ["🥇", "🥈", "🥉"]
-            medal = medals[i] if i < 3 else "🏅"
-            st.markdown(f'<div class="rank-entry {rank_class}">{medal} {entry}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="rank-entry {rank_class}">{entry}</div>', unsafe_allow_html=True)
         
         st.markdown('</div>', unsafe_allow_html=True)
         st.balloons()
     
     # Activity feed in sidebar (non-intrusive)
     with st.sidebar:
-        st.markdown("### 📢 Activity Feed")
+        st.markdown("### Activity Feed")
         st.markdown(f"**Connected as:** {st.session_state.client.username}")
         st.markdown("---")
         
@@ -447,24 +489,24 @@ else:
         if st.session_state.messages:
             for msg_type, content in st.session_state.messages[-15:]:
                 if "correctly" in content.lower() and st.session_state.client.username in content:
-                    st.success(f"✓ {content}")
+                    st.success(f"{content}")
                 elif "incorrectly" in content.lower() and st.session_state.client.username in content:
-                    st.error(f"✗ {content}")
+                    st.error(f"{content}")
                 elif "joined" in content.lower():
-                    st.info(f"👋 {content}")
+                    st.info(f"{content}")
                 elif "starting" in content.lower():
-                    st.success(f"🚀 {content}")
+                    st.success(f"{content}")
                 elif "finished" in content.lower():
-                    st.success(f"🏁 {content}")
+                    st.success(f"{content}")
                 elif "time's up" in content.lower():
-                    st.warning("⏰ Time's up!")
+                    st.warning("Time's up!")
                 else:
-                    st.caption(f"📢 {content}")
+                    st.caption(f"{content}")
         else:
             st.caption("No activity yet...")
         
         st.markdown("---")
-        if st.button("🚪 Disconnect", use_container_width=True):
+        if st.button("Disconnect", use_container_width=True):
             if st.session_state.client:
                 st.session_state.client.disconnect()
             st.session_state.clear()
