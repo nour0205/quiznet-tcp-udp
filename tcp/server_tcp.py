@@ -3,13 +3,14 @@ import time
 import threading
 import sys
 import os
+import queue
 
 # Add parent directory to path to import questions
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from questions import QUESTIONS
 
 # --- Server setup ---
-HOST = "0.0.0.0"   # Listen on all interfaces
+HOST = "0.0.0.0"
 PORT = 8888
 ADDR = (HOST, PORT)
 
@@ -23,7 +24,7 @@ print(f"[SERVER STARTED] Listening on TCP port {PORT} ...")
 
 clients = {}  # username -> connection object
 scores = {}   # username -> score
-answer_queues = {}  # username -> queue of answers
+answer_queue = queue.Queue()  # Global queue for all answers
 quiz_started = False
 questions = QUESTIONS
 clients_lock = threading.Lock()
@@ -32,16 +33,22 @@ def broadcast(message):
     """Send message to all connected clients"""
     with clients_lock:
         disconnected = []
-        for username, conn in clients.items():
+        for username, conn in list(clients.items()):
             try:
-                conn.send(message.encode())
-            except:
+                conn.sendall(message.encode())
+            except Exception as e:
+                print(f"[ERROR] Failed to send to {username}: {e}")
                 disconnected.append(username)
         
         # Remove disconnected clients
         for username in disconnected:
-            print(f"[DISCONNECT] {username} disconnected")
-            del clients[username]
+            print(f"[DISCONNECT] {username} disconnected during broadcast")
+            if username in clients:
+                try:
+                    clients[username].close()
+                except:
+                    pass
+                del clients[username]
             if username in scores:
                 del scores[username]
 
@@ -50,32 +57,32 @@ def handle_client(conn, addr):
     username = None
     try:
         # First message should be join with username
+        conn.settimeout(5.0)
         data = conn.recv(1024).decode()
         if data.startswith("join:"):
             username = data.split(":", 1)[1]
             with clients_lock:
                 clients[username] = conn
                 scores[username] = 0
-                answer_queues[username] = []
             print(f"[JOIN] {username} joined from {addr}")
             broadcast(f"broadcast:{username} joined the quiz!")
         
         # Keep connection alive and handle incoming messages
+        conn.settimeout(1.0)
         while True:
             try:
-                conn.settimeout(1.0)
                 msg = conn.recv(1024).decode()
                 if not msg:
                     break
                 
-                # Store answer messages in queue for ask_questions to process
+                # Put answer messages in global queue
                 if msg.startswith("answer:"):
-                    with clients_lock:
-                        if username in answer_queues:
-                            answer_queues[username].append(msg)
+                    answer_queue.put(msg)
+                    print(f"[RECEIVED] Answer from {username}")
             except socket.timeout:
                 continue
-            except:
+            except Exception as e:
+                print(f"[ERROR] Receive error for {username}: {e}")
                 break
     except Exception as e:
         print(f"[ERROR] Client handler error: {e}")
@@ -83,11 +90,13 @@ def handle_client(conn, addr):
         if username:
             with clients_lock:
                 if username in clients:
+                    try:
+                        clients[username].close()
+                    except:
+                        pass
                     del clients[username]
                 if username in scores:
                     del scores[username]
-                if username in answer_queues:
-                    del answer_queues[username]
             print(f"[DISCONNECT] {username} disconnected")
 
 def accept_connections():
@@ -106,52 +115,71 @@ def accept_connections():
 def ask_questions():
     """Run the quiz by broadcasting questions and collecting answers"""
     for qid, (text, correct, options) in enumerate(questions, 1):
-        print(f"[QUESTION {qid}] Broadcasting...")
+        print(f"\n[QUESTION {qid}] Broadcasting...")
         opts = "|".join([f"{key}) {val}" for key, val in options.items()])
         broadcast(f"question:{qid}:{text}|{opts}")
+        print(f"[QUESTION {qid}] Question sent, waiting for answers...")
         
         start = time.time()
         answered_users = set()  # Track who has answered this question
 
+        # Clear any old answers from queue
+        while not answer_queue.empty():
+            try:
+                answer_queue.get_nowait()
+            except:
+                break
+
         while time.time() - start < 10:  # 10 sec limit
-            time.sleep(0.1)  # Small delay to prevent busy-waiting
-            
-            with clients_lock:
-                # Check answer queues for all users
-                for username in list(answer_queues.keys()):
+            try:
+                # Check for answers with timeout
+                msg = answer_queue.get(timeout=0.1)
+                
+                if msg.startswith("answer:"):
+                    _, username, choice = msg.split(":")
+                    
+                    # Check if user already answered
                     if username in answered_users:
                         continue
                     
-                    # Check if this user has submitted an answer
-                    if answer_queues[username]:
-                        msg = answer_queues[username].pop(0)
+                    # Check if user still connected
+                    with clients_lock:
+                        if username not in clients:
+                            continue
+                    
+                    answered_users.add(username)
+                    print(f"[ANSWER] {username} answered: {choice}")
+                    
+                    if choice == correct:
+                        # Calculate time-based score
+                        elapsed = time.time() - start
+                        points = max(10, int(100 - (elapsed * 9)))
+                        with clients_lock:
+                            scores[username] += points
+                        broadcast(f"broadcast:{username} answered correctly! (+{points} points)")
+                    else:
+                        broadcast(f"broadcast:{username} answered incorrectly. (0 points)")
                         
-                        if msg.startswith("answer:"):
-                            _, user, choice = msg.split(":")
-                            if user == username and user not in answered_users:
-                                answered_users.add(user)
-                                
-                                if choice == correct:
-                                    # Calculate time-based score
-                                    elapsed = time.time() - start
-                                    points = max(10, int(100 - (elapsed * 9)))
-                                    scores[username] += points
-                                    broadcast(f"broadcast:{username} answered correctly! (+{points} points)")
-                                else:
-                                    broadcast(f"broadcast:{username} answered incorrectly. (0 points)")
+            except queue.Empty:
+                continue
 
+        print(f"[QUESTION {qid}] Time's up! Correct answer: {correct}")
         # Show correct answer
         broadcast(f"broadcast:\n⏰ Time's up! Correct answer was {correct}) {options[correct]}.")
 
         # Show scores
-        score_msg = " ".join([f"{u}:{s}" for u, s in scores.items()])
+        with clients_lock:
+            score_msg = " ".join([f"{u}:{s}" for u, s in scores.items()])
         broadcast(f"score:{score_msg}")
+        print(f"[SCORES] Current scores: {scores}")
         time.sleep(2)  # Brief pause between questions
 
+    print("\n[SERVER] Quiz complete!")
     broadcast("broadcast:Quiz finished! Thanks for playing.")
     
     # Show final rankings
-    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    with clients_lock:
+        sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     ranking = " | ".join([f"{i+1}. {u} ({s} pts)" for i, (u, s) in enumerate(sorted_scores)])
     broadcast(f"ranking:{ranking}")
     print("[SERVER] Quiz ended.")
